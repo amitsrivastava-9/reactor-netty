@@ -71,9 +71,13 @@ import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
 import io.netty.util.concurrent.DefaultEventExecutor;
 import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
+import org.testcontainers.containers.GenericContainer;
+
 import reactor.core.publisher.DirectProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -101,6 +105,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @since 0.6
  */
 public class HttpClientTest {
+
+	@ClassRule
+	public static GenericContainer httpBin =
+			new GenericContainer("kennethreitz/httpbin")
+					.withExposedPorts(80);
+
+	private static String httpExampleCom;
+
+	@BeforeClass
+	public static void initExampleComUrl() {
+		httpExampleCom = "http://" + httpBin.getContainerIpAddress() + ":" + httpBin.getFirstMappedPort() + "/";
+	}
 
 	@Test
 	public void abort() {
@@ -324,7 +340,8 @@ public class HttpClientTest {
 	public void postUpload() throws IOException {
 		HttpClient client =
 				HttpClient.create()
-				          .tcpConfiguration(tcpClient -> tcpClient.host("httpbin.org"))
+				          .tcpConfiguration(tcpClient -> tcpClient.host(httpBin.getContainerIpAddress()))
+				          .port(httpBin.getFirstMappedPort())
 				          .wiretap(true);
 
 		Tuple2<Integer, String> res;
@@ -347,7 +364,7 @@ public class HttpClientTest {
 	@Test
 	public void simpleTest404() {
 		doSimpleTest404(HttpClient.create()
-		                          .baseUrl("example.com"));
+		                          .baseUrl(httpExampleCom));
 	}
 
 	@Test
@@ -355,8 +372,8 @@ public class HttpClientTest {
 		ConnectionProvider pool = ConnectionProvider.fixed("http", 1);
 		HttpClient client =
 				HttpClient.create(pool)
-				          .port(80)
-				          .tcpConfiguration(tcpClient -> tcpClient.host("example.com"))
+				          .tcpConfiguration(tcpClient -> tcpClient.host(httpBin.getContainerIpAddress()))
+				          .port(httpBin.getFirstMappedPort())
 				          .wiretap(true);
 		doSimpleTest404(client);
 		doSimpleTest404(client);
@@ -378,14 +395,15 @@ public class HttpClientTest {
 	}
 
 	@Test
-	public void disableChunkForced() {
+	public void disableChunkForcedWhenBody() {
 		Tuple2<HttpResponseStatus, String> r =
 				HttpClient.newConnection()
-				          .tcpConfiguration(tcpClient -> tcpClient.host("example.com"))
+				          .tcpConfiguration(tcpClient -> tcpClient.host(httpBin.getContainerIpAddress()))
+				          .port(httpBin.getFirstMappedPort())
 				          .headers(h -> h.set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED))
 				          .wiretap(true)
 				          .request(HttpMethod.GET)
-				          .uri("/status/404")
+				          .uri("/headers")
 				          .send(ByteBufFlux.fromString(Flux.just("hello")))
 				          .responseSingle((res, conn) -> Mono.just(res.status())
 				                                             .zipWith(conn.asString()))
@@ -393,25 +411,34 @@ public class HttpClientTest {
 
 		assertThat(r).isNotNull();
 
-		Assert.assertEquals(r.getT1(), HttpResponseStatus.BAD_REQUEST);
+		assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
+		assertThat(r.getT2())
+				.as("transfer encoding replaced with content length")
+				.contains("\"Content-Length\": \"5\"")
+				.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
 	}
 
 	@Test
-	public void disableChunkForced2() {
+	public void disableChunkForcedByDefault() {
 		Tuple2<HttpResponseStatus, String> r =
 				HttpClient.newConnection()
-				          .tcpConfiguration(tcpClient -> tcpClient.host("example.com"))
+				          .tcpConfiguration(tcpClient -> tcpClient.host(httpBin.getContainerIpAddress()))
+				          .port(httpBin.getFirstMappedPort())
 				          .wiretap(true)
 				          .keepAlive(false)
 				          .get()
-				          .uri("/status/404")
+				          .uri("/headers")
 				          .responseSingle((res, conn) -> Mono.just(res.status())
 				                                             .zipWith(conn.asString()))
 				          .block(Duration.ofSeconds(30));
 
 		assertThat(r).isNotNull();
 
-		Assert.assertEquals(r.getT1(), HttpResponseStatus.NOT_FOUND);
+		assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
+		assertThat(r.getT2())
+				.as("default to content length 0")
+				.contains("\"Content-Length\": \"0\"")
+				.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
 	}
 
 	@Test
@@ -425,7 +452,7 @@ public class HttpClientTest {
 				          .doOnResponse((res, c) -> ch1.set(c.channel()))
 				          .wiretap(true)
 				          .get()
-				          .uri("http://example.com/status/404")
+				          .uri(httpExampleCom + "status/404")
 				          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
 				          .block(Duration.ofSeconds(30));
 
@@ -433,7 +460,7 @@ public class HttpClientTest {
 		          .doOnResponse((res, c) -> ch2.set(c.channel()))
 		          .wiretap(true)
 		          .get()
-		          .uri("http://example.com/status/404")
+		          .uri(httpExampleCom + "status/404")
 		          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
 		          .block(Duration.ofSeconds(30));
 
@@ -452,7 +479,8 @@ public class HttpClientTest {
 		ConnectionProvider p = ConnectionProvider.fixed("test", 1);
 		HttpClient client =
 				HttpClient.create(p)
-				          .tcpConfiguration(tcpClient -> tcpClient.host("example.com"))
+				          .tcpConfiguration(tcpClient -> tcpClient.host(httpBin.getContainerIpAddress()))
+				          .port(httpBin.getFirstMappedPort())
 				          .wiretap(true);
 
 		Tuple2<HttpResponseStatus, Channel> r =
@@ -483,26 +511,40 @@ public class HttpClientTest {
 	@Test
 	public void contentHeader() {
 		ConnectionProvider fixed = ConnectionProvider.fixed("test", 1);
-		HttpClient client =
-				HttpClient.create(fixed)
-				          .wiretap(true)
-				          .headers(h -> h.add("content-length", "1"));
 
-		HttpResponseStatus r =
-				client.request(HttpMethod.GET)
-				      .uri("http://example.com")
-				      .send(ByteBufFlux.fromString(Mono.just(" ")))
-				      .responseSingle((res, buf) -> Mono.just(res.status()))
-				      .block(Duration.ofSeconds(30));
+		try {
+			HttpClient client =
+					HttpClient.create(fixed)
+					          .wiretap(true)
+					          .headers(h -> h.add("content-length", "1"));
 
-		client.request(HttpMethod.GET)
-		      .uri("http://example.com")
-		      .send(ByteBufFlux.fromString(Mono.just(" ")))
-		      .responseSingle((res, buf) -> Mono.just(res.status()))
-		      .block(Duration.ofSeconds(30));
+			Tuple2<HttpResponseStatus, String> r1 =
+					client.request(HttpMethod.GET)
+					      .uri(httpExampleCom + "anything")
+					      .send(ByteBufFlux.fromString(Mono.just(" ")))
+					      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
+					      .block(Duration.ofSeconds(30));
 
-		Assert.assertEquals(r, HttpResponseStatus.BAD_REQUEST);
-		fixed.dispose();
+			Tuple2<HttpResponseStatus, String> r2 =
+					client.request(HttpMethod.GET)
+					      .uri(httpExampleCom + "anything")
+					      .send(ByteBufFlux.fromString(Mono.just(" ")))
+					      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
+					      .block(Duration.ofSeconds(30));
+
+			assertThat(r1.getT1()).as("r1 status").isSameAs(HttpResponseStatus.OK);
+			assertThat(r2.getT1()).as("r2 status").isSameAs(HttpResponseStatus.OK);
+
+			assertThat(r1.getT2()).as("r1 body")
+			                      .contains("\"data\": \" \"")
+			                      .contains("\"Content-Length\": \"1\"");
+			assertThat(r2.getT2()).as("r2 body")
+			                      .contains("\"data\": \" \"")
+			                      .contains("\"Content-Length\": \"1\"");
+		}
+		finally {
+			fixed.dispose();
+		}
 	}
 
 	@Test
@@ -677,7 +719,7 @@ public class HttpClientTest {
 	@Test
 	public void gettingOptionsDuplicates() {
 		HttpClient client = HttpClient.create()
-		                              .tcpConfiguration(tcpClient -> tcpClient.host("example.com"))
+		                              .tcpConfiguration(tcpClient -> tcpClient.host("example.org")) //using example.org, but not resolved anyway
 		                              .wiretap(true)
 		                              .port(123)
 		                              .compress(true);

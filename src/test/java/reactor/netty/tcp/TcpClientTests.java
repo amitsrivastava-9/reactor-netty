@@ -47,6 +47,8 @@ import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
+import org.testcontainers.containers.GenericContainer;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -63,8 +65,7 @@ import reactor.test.StepVerifier;
 import reactor.util.Loggers;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
 /**
@@ -558,19 +559,35 @@ public class TcpClientTests {
 
 	@Test
 	public void nettyNetChannelAcceptsNettyChannelHandlers() throws InterruptedException {
-		HttpClient client = HttpClient.create()
-		                              .wiretap(true);
+		//the main goal of this test seems to be to validate "net channel" interaction, and testcontainer is connected to via a SocketChannel
+		GenericContainer httpbin = new GenericContainer("kennethreitz/httpbin")
+				.withExposedPorts(80);
+		httpbin.start();
+		String testUrl = "http://" + httpbin.getContainerIpAddress() + ":" + httpbin.getFirstMappedPort() + "/get?q=test%20d%20dq";
 
-		final CountDownLatch latch = new CountDownLatch(1);
-		System.out.println(client.get()
-		                         .uri("http://example.com/?q=test%20d%20dq")
-		                         .responseContent()
-		                         .asString()
-		                         .collectList()
-		                         .doOnSuccess(v -> latch.countDown())
-		                         .block(Duration.ofSeconds(30)));
+		try {
+			HttpClient client = HttpClient.create()
+			                              .tcpConfiguration(tcp -> tcp.doOnConnected(c -> System.err.println(c.channel().getClass())))
+			                              .wiretap(true);
 
-		assertTrue("Latch didn't time out", latch.await(15, TimeUnit.SECONDS));
+
+			final CountDownLatch latch = new CountDownLatch(1);
+			List<String> bodyCollectList = client.get()
+			                                     .uri(testUrl)
+			                                     .responseContent()
+			                                     .asString()
+			                                     .collectList()
+			                                     .doOnSuccess(v -> latch.countDown())
+			                                     .block(Duration.ofSeconds(30));
+
+			//we make a few assertions on the request not timing out and the body content,
+			//but this test is more about testing the socket channel setup
+			assertTrue("Latch didn't time out", latch.await(15, TimeUnit.SECONDS));
+			assertThat(bodyCollectList.get(0), containsString("\"q\": \"test d dq\""));
+		}
+		finally {
+			httpbin.stop();
+		}
 	}
 
 	@Test
