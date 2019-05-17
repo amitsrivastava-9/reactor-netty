@@ -47,13 +47,13 @@ import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
-import org.testcontainers.containers.GenericContainer;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.netty.Connection;
 import reactor.netty.DisposableServer;
+import reactor.netty.HttpEchoTestingUtils;
 import reactor.netty.NettyOutbound;
 import reactor.netty.SocketUtils;
 import reactor.netty.channel.AbortedException;
@@ -559,15 +559,17 @@ public class TcpClientTests {
 
 	@Test
 	public void nettyNetChannelAcceptsNettyChannelHandlers() throws InterruptedException {
-		//the main goal of this test seems to be to validate "net channel" interaction, and testcontainer is connected to via a SocketChannel
-		GenericContainer httpbin = new GenericContainer("kennethreitz/httpbin")
-				.withExposedPorts(80);
-		httpbin.start();
-		String testUrl = "http://" + httpbin.getContainerIpAddress() + ":" + httpbin.getFirstMappedPort() + "/get?q=test%20d%20dq";
+		HttpEchoTestingUtils echoTestServer = new HttpEchoTestingUtils();
+		echoTestServer.start();
+
+		//the main goal of this test seems to be to validate "net channel" interaction
+		// HttpClient interacts with MockServer through a NioSocketChannel
+		String testUrl = "http://localhost:" + echoTestServer.getPort() + "/anything?q=test%20d%20dq";
 
 		try {
 			HttpClient client = HttpClient.create()
-			                              .tcpConfiguration(tcp -> tcp.doOnConnected(c -> System.err.println(c.channel().getClass())))
+			                              //uncomment to verify the type of Channel used
+//			                              .tcpConfiguration(tcp -> tcp.doOnConnected(c -> System.err.println(c.channel().getClass())))
 			                              .wiretap(true);
 
 
@@ -583,10 +585,10 @@ public class TcpClientTests {
 			//we make a few assertions on the request not timing out and the body content,
 			//but this test is more about testing the socket channel setup
 			assertTrue("Latch didn't time out", latch.await(15, TimeUnit.SECONDS));
-			assertThat(bodyCollectList.get(0), containsString("\"q\": \"test d dq\""));
+			assertThat(bodyCollectList.get(0), containsString("\"q\" : [ \"test d dq\" ]"));
 		}
 		finally {
-			httpbin.stop();
+			echoTestServer.stop();
 		}
 	}
 
