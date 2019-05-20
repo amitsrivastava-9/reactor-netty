@@ -559,18 +559,15 @@ public class TcpClientTests {
 
 	@Test
 	public void nettyNetChannelAcceptsNettyChannelHandlers() throws InterruptedException {
-		HttpEchoTestingUtils echoTestServer = new HttpEchoTestingUtils();
-		echoTestServer.start();
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
 
-		//the main goal of this test seems to be to validate "net channel" interaction
-		// HttpClient interacts with MockServer through a NioSocketChannel
-		String testUrl = "http://localhost:" + echoTestServer.getPort() + "/anything?q=test%20d%20dq";
-
-		try {
+			//the main goal of this test seems to be to validate "net channel" interaction
+			// HttpClient interacts with MockServer through a NioSocketChannel
+			String testUrl = "http://localhost:" + echoTestingPort + "/anything?q=test%20d%20dq";
 			HttpClient client = HttpClient.create()
 			                              //uncomment to verify the type of Channel used
 //			                              .tcpConfiguration(tcp -> tcp.doOnConnected(c -> System.err.println(c.channel().getClass())))
-			                              .wiretap(true);
+                                          .wiretap(true);
 
 
 			final CountDownLatch latch = new CountDownLatch(1);
@@ -584,12 +581,16 @@ public class TcpClientTests {
 
 			//we make a few assertions on the request not timing out and the body content,
 			//but this test is more about testing the socket channel setup
-			assertTrue("Latch didn't time out", latch.await(15, TimeUnit.SECONDS));
+			boolean noTimeout = false;
+			try {
+				noTimeout = latch.await(15, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException e) {
+				Assertions.fail("Latch interrupted", e);
+			}
+			assertTrue("Latch didn't time out",noTimeout);
 			assertThat(bodyCollectList.get(0), containsString("\"q\" : [ \"test d dq\" ]"));
-		}
-		finally {
-			echoTestServer.stop();
-		}
+		});
 	}
 
 	@Test

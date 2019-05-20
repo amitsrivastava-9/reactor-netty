@@ -70,9 +70,8 @@ import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
 import io.netty.util.concurrent.DefaultEventExecutor;
+import org.assertj.core.api.Assertions;
 import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
@@ -105,20 +104,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @since 0.6
  */
 public class HttpClientTest {
-
-	@ClassRule
-	public static HttpEchoTestingUtils echoTestingServer = new HttpEchoTestingUtils();
-
-	private static String echoTestingHttpUrl;
-	private static String echoTestingHost;
-	private static int    echoTestingPort;
-
-	@BeforeClass
-	public static void initExampleComUrl() {
-		echoTestingHost = "localhost";
-		echoTestingPort = echoTestingServer.getPort();
-		echoTestingHttpUrl = "http://localhost:" + echoTestingPort + "/";
-	}
 
 	@Test
 	public void abort() {
@@ -339,54 +324,63 @@ public class HttpClientTest {
 	}
 
 	@Test
-	public void postUpload() throws IOException {
-		HttpClient client =
-				HttpClient.create()
-				          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
-				          .port(echoTestingPort)
-				          .wiretap(true);
+	public void postUpload() {
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
+			HttpClient client =
+					HttpClient.create()
+					          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
+					          .port(echoTestingPort)
+					          .wiretap(true);
 
-		Tuple2<Integer, String> res;
-		try (InputStream f = getClass().getResourceAsStream("/smallFile.txt")) {
-			res = client.post()
-			      .uri("/anything")
-			      .sendForm((req, form) -> form.multipart(true)
-			                                   .file("test", f)
-			                                   .attr("attr1", "attr2")
-			                                   .file("test2", f))
-			      .responseSingle((r, buf) -> buf.asString().map(s -> Tuples.of(r.status().code(), s)))
-			      .block(Duration.ofSeconds(30));
-		}
+			Tuple2<Integer, String> res = null;
+			try (InputStream f = getClass().getResourceAsStream("/smallFile.txt")) {
+				res = client.post()
+				            .uri("/anything")
+				            .sendForm((req, form) -> form.multipart(true)
+				                                         .file("test", f)
+				                                         .attr("attr1", "attr2")
+				                                         .file("test2", f))
+				            .responseSingle((r, buf) -> buf.asString().map(s -> Tuples.of(r.status().code(), s)))
+				            .block(Duration.ofSeconds(30));
+			}
+			catch (IOException e) {
+				Assertions.fail("Couldn't read file to upload", e);
+			}
 
-		assertThat(res).as("response").isNotNull();
-		assertThat(res.getT1()).as("status code").isEqualTo(200);
-		assertThat(res.getT2()).as("response body reflecting request")
-		                       .contains("\"method\" : \"POST\",")
-		                       .contains("\"content-type\" : [ \"multipart/form-data;")
-		                       .contains("\"body\" : \"--")
-		                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"test\\\"\\r\\ncontent-length: 95\\r\\ncontent-type: application/octet-stream\\r\\ncontent-transfer-encoding: binary\\r\\n\\r\\nThis is an UTF-8 file that is smaller than 1024 bytes.\\nIt contains accents like é.\\nEnd of File\\r\\n--")
-		                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"attr1\\\"\\r\\ncontent-length: 5\\r\\ncontent-type: text/plain; charset=UTF-8\\r\\n\\r\\nattr2\\r\\n--")
-		                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"test2\\\"\\r\\ncontent-length: 0\\r\\ncontent-type: application/octet-stream\\r\\ncontent-transfer-encoding: binary\\r\\n\\r\\n\\r\\n--")
-		                       .contains("--\\r\\n\"");
+			assertThat(res).as("response").isNotNull();
+			assertThat(res.getT1()).as("status code").isEqualTo(200);
+			assertThat(res.getT2()).as("response body reflecting request")
+			                       .contains("\"method\" : \"POST\",")
+			                       .contains("\"content-type\" : [ \"multipart/form-data;")
+			                       .contains("\"body\" : \"--")
+			                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"test\\\"\\r\\ncontent-length: 95\\r\\ncontent-type: application/octet-stream\\r\\ncontent-transfer-encoding: binary\\r\\n\\r\\nThis is an UTF-8 file that is smaller than 1024 bytes.\\nIt contains accents like é.\\nEnd of File\\r\\n--")
+			                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"attr1\\\"\\r\\ncontent-length: 5\\r\\ncontent-type: text/plain; charset=UTF-8\\r\\n\\r\\nattr2\\r\\n--")
+			                       .contains("\\r\\ncontent-disposition: form-data; name=\\\"test2\\\"\\r\\ncontent-length: 0\\r\\ncontent-type: application/octet-stream\\r\\ncontent-transfer-encoding: binary\\r\\n\\r\\n\\r\\n--")
+			                       .contains("--\\r\\n\"");
+		});
 	}
 
 	@Test
 	public void simpleTest404() {
-		doSimpleTest404(HttpClient.create()
-		                          .baseUrl(echoTestingHttpUrl));
+		HttpEchoTestingUtils.runOnEchoHttpUrl(echoTestingHttpUrl ->
+				doSimpleTest404(HttpClient.create()
+				                          .baseUrl(echoTestingHttpUrl))
+		);
 	}
 
 	@Test
 	public void simpleTest404_1() {
-		ConnectionProvider pool = ConnectionProvider.fixed("http", 1);
-		HttpClient client =
-				HttpClient.create(pool)
-				          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
-				          .port(echoTestingPort)
-				          .wiretap(true);
-		doSimpleTest404(client);
-		doSimpleTest404(client);
-		pool.dispose();
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
+			ConnectionProvider pool = ConnectionProvider.fixed("http", 1);
+			HttpClient client =
+					HttpClient.create(pool)
+					          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
+					          .port(echoTestingPort)
+					          .wiretap(true);
+			doSimpleTest404(client);
+			doSimpleTest404(client);
+			pool.dispose();
+		});
 	}
 
 	private void doSimpleTest404(HttpClient client) {
@@ -405,155 +399,165 @@ public class HttpClientTest {
 
 	@Test
 	public void disableChunkForcedWhenBody() {
-		Tuple2<HttpResponseStatus, String> r =
-				HttpClient.newConnection()
-				          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
-				          .port(echoTestingPort)
-				          .headers(h -> h.set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED))
-				          .wiretap(true)
-				          .request(HttpMethod.GET)
-				          .uri("/headers")
-				          .send(ByteBufFlux.fromString(Flux.just("hello")))
-				          .responseSingle((res, conn) -> Mono.just(res.status())
-				                                             .zipWith(conn.asString()))
-				          .block(Duration.ofSeconds(30));
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
+			Tuple2<HttpResponseStatus, String> r =
+					HttpClient.newConnection()
+					          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
+					          .port(echoTestingPort)
+					          .headers(h -> h.set(HttpHeaderNames.TRANSFER_ENCODING, HttpHeaderValues.CHUNKED))
+					          .wiretap(true)
+					          .request(HttpMethod.GET)
+					          .uri("/headers")
+					          .send(ByteBufFlux.fromString(Flux.just("hello")))
+					          .responseSingle((res, conn) -> Mono.just(res.status())
+					                                             .zipWith(conn.asString()))
+					          .block(Duration.ofSeconds(30));
 
-		assertThat(r).isNotNull();
+			assertThat(r).isNotNull();
 
-		assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
-		assertThat(r.getT2())
-				.as("transfer encoding replaced with content length")
-				.contains("\"content-length\" : [ \"5\" ]")
-				.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
+			assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
+			assertThat(r.getT2())
+					.as("transfer encoding replaced with content length")
+					.contains("\"content-length\" : [ \"5\" ]")
+					.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
+		});
 	}
 
 	@Test
 	public void disableChunkForcedByDefault() {
-		Tuple2<HttpResponseStatus, String> r =
-				HttpClient.newConnection()
-				          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
-				          .port(echoTestingPort)
-				          .wiretap(true)
-				          .keepAlive(false)
-				          .get()
-				          .uri("/headers")
-				          .responseSingle((res, conn) -> Mono.just(res.status())
-				                                             .zipWith(conn.asString()))
-				          .block(Duration.ofSeconds(30));
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
+			Tuple2<HttpResponseStatus, String> r =
+					HttpClient.newConnection()
+					          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
+					          .port(echoTestingPort)
+					          .wiretap(true)
+					          .keepAlive(false)
+					          .get()
+					          .uri("/headers")
+					          .responseSingle((res, conn) -> Mono.just(res.status())
+					                                             .zipWith(conn.asString()))
+					          .block(Duration.ofSeconds(30));
 
-		assertThat(r).isNotNull();
+			assertThat(r).isNotNull();
 
-		assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
-		assertThat(r.getT2())
-				.as("default to content length 0")
-				.contains("\"content-length\" : [ \"0\" ]")
-				.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
+			assertThat(r.getT1()).isSameAs(HttpResponseStatus.OK);
+			assertThat(r.getT2())
+					.as("default to content length 0")
+					.contains("\"content-length\" : [ \"0\" ]")
+					.doesNotContain(HttpHeaderNames.TRANSFER_ENCODING);
+		});
 	}
 
 	@Test
 	public void simpleClientPooling() {
-		ConnectionProvider p = ConnectionProvider.fixed("test", 1);
-		AtomicReference<Channel> ch1 = new AtomicReference<>();
-		AtomicReference<Channel> ch2 = new AtomicReference<>();
+		HttpEchoTestingUtils.runOnEchoHttpUrl(echoTestingHttpUrl -> {
+			ConnectionProvider p = ConnectionProvider.fixed("test", 1);
+			AtomicReference<Channel> ch1 = new AtomicReference<>();
+			AtomicReference<Channel> ch2 = new AtomicReference<>();
 
-		HttpResponseStatus r =
-				HttpClient.create(p)
-				          .doOnResponse((res, c) -> ch1.set(c.channel()))
-				          .wiretap(true)
-				          .get()
-				          .uri(echoTestingHttpUrl + "status/404")
-				          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
-				          .block(Duration.ofSeconds(30));
+			HttpResponseStatus r =
+					HttpClient.create(p)
+					          .doOnResponse((res, c) -> ch1.set(c.channel()))
+					          .wiretap(true)
+					          .get()
+					          .uri(echoTestingHttpUrl + "status/404")
+					          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
+					          .block(Duration.ofSeconds(30));
 
-		HttpClient.create(p)
-		          .doOnResponse((res, c) -> ch2.set(c.channel()))
-		          .wiretap(true)
-		          .get()
-		          .uri(echoTestingHttpUrl + "status/404")
-		          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
-		          .block(Duration.ofSeconds(30));
+			HttpClient.create(p)
+			          .doOnResponse((res, c) -> ch2.set(c.channel()))
+			          .wiretap(true)
+			          .get()
+			          .uri(echoTestingHttpUrl + "status/404")
+			          .responseSingle((res, buf) -> buf.thenReturn(res.status()))
+			          .block(Duration.ofSeconds(30));
 
-		AtomicBoolean same = new AtomicBoolean();
+			AtomicBoolean same = new AtomicBoolean();
 
-		same.set(ch1.get() == ch2.get());
+			same.set(ch1.get() == ch2.get());
 
-		Assert.assertTrue(same.get());
+			Assert.assertTrue(same.get());
 
-		Assert.assertEquals(r, HttpResponseStatus.NOT_FOUND);
-		p.dispose();
+			Assert.assertEquals(r, HttpResponseStatus.NOT_FOUND);
+			p.dispose();
+		});
 	}
 
 	@Test
 	public void disableChunkImplicitDefault() {
-		ConnectionProvider p = ConnectionProvider.fixed("test", 1);
-		HttpClient client =
-				HttpClient.create(p)
-				          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
-				          .port(echoTestingPort)
-				          .wiretap(true);
+		HttpEchoTestingUtils.runOnEchoHostAndPort((echoTestingHost, echoTestingPort) -> {
+			ConnectionProvider p = ConnectionProvider.fixed("test", 1);
+			HttpClient client =
+					HttpClient.create(p)
+					          .tcpConfiguration(tcpClient -> tcpClient.host(echoTestingHost))
+					          .port(echoTestingPort)
+					          .wiretap(true);
 
-		Tuple2<HttpResponseStatus, Channel> r =
-				client.get()
-				      .uri("/status/404")
-				      .responseConnection((res, conn) -> Mono.just(res.status())
-				                                             .delayUntil(s -> conn.inbound().receive())
-				                                             .zipWith(Mono.just(conn.channel())))
-				      .blockLast(Duration.ofSeconds(30));
+			Tuple2<HttpResponseStatus, Channel> r =
+					client.get()
+					      .uri("/status/404")
+					      .responseConnection((res, conn) -> Mono.just(res.status())
+					                                             .delayUntil(s -> conn.inbound().receive())
+					                                             .zipWith(Mono.just(conn.channel())))
+					      .blockLast(Duration.ofSeconds(30));
 
-		assertThat(r).isNotNull();
+			assertThat(r).isNotNull();
 
-		Channel r2 =
-				client.get()
-				      .uri("/status/404")
-				      .responseConnection((res, conn) -> Mono.just(conn.channel())
-				                                             .delayUntil(s -> conn.inbound().receive()))
-				      .blockLast(Duration.ofSeconds(30));
+			Channel r2 =
+					client.get()
+					      .uri("/status/404")
+					      .responseConnection((res, conn) -> Mono.just(conn.channel())
+					                                             .delayUntil(s -> conn.inbound().receive()))
+					      .blockLast(Duration.ofSeconds(30));
 
-		assertThat(r2).isNotNull();
+			assertThat(r2).isNotNull();
 
-		Assert.assertSame(r.getT2(), r2);
+			Assert.assertSame(r.getT2(), r2);
 
-		Assert.assertEquals(r.getT1(), HttpResponseStatus.NOT_FOUND);
-		p.dispose();
+			Assert.assertEquals(r.getT1(), HttpResponseStatus.NOT_FOUND);
+			p.dispose();
+		});
 	}
 
 	@Test
 	public void contentHeader() {
-		ConnectionProvider fixed = ConnectionProvider.fixed("test", 1);
+		HttpEchoTestingUtils.runOnEchoHttpUrl(echoTestingHttpUrl -> {
+			ConnectionProvider fixed = ConnectionProvider.fixed("test", 1);
 
-		try {
-			HttpClient client =
-					HttpClient.create(fixed)
-					          .wiretap(true)
-					          .headers(h -> h.add("content-length", "1"));
+			try {
+				HttpClient client =
+						HttpClient.create(fixed)
+						          .wiretap(true)
+						          .headers(h -> h.add("content-length", "1"));
 
-			Tuple2<HttpResponseStatus, String> r1 =
-					client.request(HttpMethod.GET)
-					      .uri(echoTestingHttpUrl + "anything")
-					      .send(ByteBufFlux.fromString(Mono.just(" ")))
-					      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
-					      .block(Duration.ofSeconds(30));
+				Tuple2<HttpResponseStatus, String> r1 =
+						client.request(HttpMethod.GET)
+						      .uri(echoTestingHttpUrl + "anything")
+						      .send(ByteBufFlux.fromString(Mono.just(" ")))
+						      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
+						      .block(Duration.ofSeconds(30));
 
-			Tuple2<HttpResponseStatus, String> r2 =
-					client.request(HttpMethod.GET)
-					      .uri(echoTestingHttpUrl + "anything")
-					      .send(ByteBufFlux.fromString(Mono.just(" ")))
-					      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
-					      .block(Duration.ofSeconds(30));
+				Tuple2<HttpResponseStatus, String> r2 =
+						client.request(HttpMethod.GET)
+						      .uri(echoTestingHttpUrl + "anything")
+						      .send(ByteBufFlux.fromString(Mono.just(" ")))
+						      .responseSingle((res, buf) -> buf.asString().map(body -> Tuples.of(res.status(), body)))
+						      .block(Duration.ofSeconds(30));
 
-			assertThat(r1.getT1()).as("r1 status").isSameAs(HttpResponseStatus.OK);
-			assertThat(r2.getT1()).as("r2 status").isSameAs(HttpResponseStatus.OK);
+				assertThat(r1.getT1()).as("r1 status").isSameAs(HttpResponseStatus.OK);
+				assertThat(r2.getT1()).as("r2 status").isSameAs(HttpResponseStatus.OK);
 
-			assertThat(r1.getT2()).as("r1 body")
-			                      .contains("\"body\" : \" \"")
-			                      .contains("\"content-length\" : [ \"1\" ]");
-			assertThat(r2.getT2()).as("r2 body")
-			                      .contains("\"body\" : \" \"")
-			                      .contains("\"content-length\" : [ \"1\" ]");
-		}
-		finally {
-			fixed.dispose();
-		}
+				assertThat(r1.getT2()).as("r1 body")
+				                      .contains("\"body\" : \" \"")
+				                      .contains("\"content-length\" : [ \"1\" ]");
+				assertThat(r2.getT2()).as("r2 body")
+				                      .contains("\"body\" : \" \"")
+				                      .contains("\"content-length\" : [ \"1\" ]");
+			}
+			finally {
+				fixed.dispose();
+			}
+		});
 	}
 
 	@Test

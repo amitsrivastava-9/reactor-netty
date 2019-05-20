@@ -15,13 +15,17 @@
  */
 package reactor.netty;
 
-import org.junit.rules.ExternalResource;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+
 import org.mockserver.integration.ClientAndServer;
 import org.mockserver.mock.action.ExpectationResponseCallback;
 import org.mockserver.model.HttpClassCallback;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.HttpStatusCode;
+
+import reactor.core.Exceptions;
 
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.notFoundResponse;
@@ -35,36 +39,44 @@ import static org.mockserver.model.HttpResponse.response;
  *
  * @author Simon Baslé
  */
-public class HttpEchoTestingUtils extends ExternalResource {
+public class HttpEchoTestingUtils {
 
-	private ClientAndServer mockServer;
-	private int             port;
-
-	@Override
-	protected void before() throws Throwable {
-		start();
-	}
-
-	@Override
-	protected void after() {
-		stop();
-	}
-
-	public int getPort() {
-		return port;
-	}
-
-	public void start() {
-		port = SocketUtils.findAvailableTcpPort();
-		mockServer = ClientAndServer.startClientAndServer(port);
+	public static void runOnEchoHostAndPort(BiConsumer<String, Integer> hostAndPortConsumer) {
+		int port = SocketUtils.findAvailableTcpPort();
+		final ClientAndServer mockServer = ClientAndServer.startClientAndServer(port);
 
 		mockServer
 				.when(request())
 				.respond(HttpClassCallback.callback("reactor.netty.HttpEchoTestingUtils$EchoStatusCallback"));
+
+		try {
+			hostAndPortConsumer.accept("localhost", port);
+		}
+		catch (Throwable t) {
+			throw Exceptions.propagate(t);
+		}
+		finally {
+			mockServer.stop(true);
+		}
 	}
 
-	public void stop() {
-		mockServer.stop();
+	public static void runOnEchoHttpUrl(Consumer<String> urlConsumer) {
+		int port = SocketUtils.findAvailableTcpPort();
+		final ClientAndServer mockServer = ClientAndServer.startClientAndServer(port);
+
+		mockServer
+				.when(request())
+				.respond(HttpClassCallback.callback("reactor.netty.HttpEchoTestingUtils$EchoStatusCallback"));
+
+		try {
+			urlConsumer.accept("http://localhost:" + port + "/");
+		}
+		catch (Throwable t) {
+			throw Exceptions.propagate(t);
+		}
+		finally {
+			mockServer.stop(true);
+		}
 	}
 
 	public static final class EchoStatusCallback implements ExpectationResponseCallback {
